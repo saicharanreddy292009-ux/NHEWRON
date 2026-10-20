@@ -3,7 +3,7 @@ import {
   Activity, ArrowDownToLine, ArrowUpRight, BookMarked, BookOpen, BrainCircuit,
   Check, ChevronRight, CircleHelp, Clock3, ExternalLink, FileText, Focus,
   LayoutDashboard, LoaderCircle, Menu, MessageCircle, NotebookPen, Pause, Play,
-  Plus, RotateCcw, Send, Settings, Sparkles, Target, Trash2, Youtube, X
+  Plus, RotateCcw, Send, Settings, Sparkles, Target, Trash2, Play, X
 } from "lucide-react";
 import logo from "../nhewron-mark.png";
 import "./styles.css";
@@ -368,7 +368,7 @@ function App() {
         {page === "studio" && (
           <section className="page">
             <div className="page-heading"><p className="eyebrow">— STUDY STUDIO</p><h1>Watch. Understand. <em>Practice.</em></h1><p className="sub">Keep your lecture, AI companion, and study notes in one workspace.</p></div>
-            <article className="panel source-panel"><div className="panel-top"><div><span className="label">LECTURE SOURCE</span><h3>Bring your YouTube lecture</h3></div><span className="small-pill"><Youtube size={13} /> PRIVACY-ENHANCED PLAYER</span></div>
+            <article className="panel source-panel"><div className="panel-top"><div><span className="label">LECTURE SOURCE</span><h3>Bring your YouTube lecture</h3></div><span className="small-pill"><Play size={13} /> PRIVACY-ENHANCED PLAYER</span></div>
               <form className="youtube-form" onSubmit={(event) => { event.preventDefault(); loadVideo(); }}><input className="input" value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="Paste a YouTube video URL…" aria-label="YouTube video URL" /><button className="primary"><Play size={14} /> Load lecture</button></form>
               <p className="hint">Videos that disallow embeds or are age-restricted may only play on YouTube. Use the direct link if the player shows an error.</p>
             </article>

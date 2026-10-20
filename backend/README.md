@@ -11,7 +11,14 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Add your xAI API key to `.env` as `XAI_API_KEY=...`. Never put this key in frontend code or commit a real `.env` file.
+Create a key in the [Groq console](https://console.groq.com/keys), then set these values in `.env`:
+
+```dotenv
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=openai/gpt-oss-120b
+```
+
+Never put this key in React code, prefix it with `VITE_`, or commit the real `.env` file.
 
 Start the API:
 
@@ -24,10 +31,10 @@ Health: http://localhost:8000/api/health
 
 ## Routes
 
-- `POST /api/chat` — Grok-backed learning conversation; accepts `messages` plus optional transcript `context`.
+- `POST /api/chat` — streams Ron's Groq response as Server-Sent Events (SSE); accepts `messages` plus optional transcript `context`.
 - `GET /api/study-packs` — list saved study packs.
 - `POST /api/study-packs` — create a study pack.
 - `GET /api/study-packs/{id}`, `PUT /api/study-packs/{id}`, `DELETE /api/study-packs/{id}` — manage a pack.
-- `GET /api/health` — API and AI configuration status.
+- `GET /api/health` — API and Groq configuration status.
 
 Study packs persist in SQLite via `DATABASE_PATH` (defaults to `nhewron.db`). This starter has no user authentication or per-user isolation: do not expose it publicly for multi-user data until authentication, authorization, quotas, and production database backups are added.

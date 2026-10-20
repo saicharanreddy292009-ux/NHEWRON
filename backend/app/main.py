@@ -40,6 +40,6 @@ async def root() -> dict[str, str]:
 async def health() -> dict[str, str | bool]:
     return {
         "status": "ok",
-        "ai_configured": bool(settings.xai_api_key.strip()),
-        "model": settings.xai_model,
+        "groq_configured": bool(settings.groq_api_key.strip()),
+        "model": settings.groq_model,
     }

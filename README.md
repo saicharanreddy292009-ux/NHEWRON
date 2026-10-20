@@ -1,11 +1,11 @@
 # NHEWRON — Focus. Learn. Evolve.
 
-NHEWRON is a learning workspace with a React + Vite frontend, a FastAPI service, Grok-powered learning chat, YouTube lecture embeds, and saved study packs.
+NHEWRON is a learning workspace with a React + Vite frontend, a FastAPI service, streamed Groq-powered learning chat, YouTube lecture embeds, and saved study packs.
 
 ## Project structure
 
 - `frontend/` — React SPA, built with Vite.
-- `backend/` — FastAPI, xAI/Grok integration and SQLite study-pack persistence.
+- `backend/` — FastAPI, Groq integration and SQLite study-pack persistence.
 
 ## Run locally
 
@@ -33,7 +33,16 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Add an xAI API key to `backend/.env` as `XAI_API_KEY=your_key_here`, then run:
+Create a key from the [Groq console](https://console.groq.com/keys). Add it to `backend/.env`:
+
+```dotenv
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=openai/gpt-oss-120b
+```
+
+Keep the Groq key on the server only. Do not put it in React source, use a `VITE_` variable for it, or commit the real `.env`.
+
+Start the server:
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -43,14 +52,12 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - Interactive API docs: http://localhost:8000/docs
 - Health: http://localhost:8000/api/health
 
-The Grok key is server-side only. Do not prefix it with `VITE_`, place it in React code, or commit the real `.env`.
-
 ## Main API routes
 
 | Method | Route | Purpose |
 |---|---|---|
-| GET | `/api/health` | Report API and AI-key configuration |
-| POST | `/api/chat` | Ask Ron a question; optional transcript context |
+| GET | `/api/health` | Report API and Groq-key configuration |
+| POST | `/api/chat` | Stream Ron responses from Groq; optional transcript context |
 | GET | `/api/study-packs` | List persisted study packs |
 | POST | `/api/study-packs` | Create a study pack |
 | GET | `/api/study-packs/{id}` | Read a study pack |

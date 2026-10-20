@@ -3,7 +3,7 @@ import {
   Activity, ArrowDownToLine, ArrowUpRight, BookMarked, BookOpen, BrainCircuit,
   Check, ChevronRight, CircleHelp, Clock3, ExternalLink, FileText, Focus,
   LayoutDashboard, LoaderCircle, Menu, MessageCircle, NotebookPen, Pause, Play,
-  Plus, RotateCcw, Send, Settings, Sparkles, Target, Trash2, Play, X
+  Plus, RotateCcw, Send, Settings, Sparkles, Target, Trash2, X
 } from "lucide-react";
 import logo from "../nhewron-mark.png";
 import "./styles.css";

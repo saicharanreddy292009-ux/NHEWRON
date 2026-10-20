@@ -197,6 +197,7 @@ function App() {
     event.preventDefault();
     const value = (target === "main" ? chatInput : studioInput).trim();
     if (!value || (target === "main" ? sending : studioSending)) return;
+
     const currentMessages = target === "main" ? messages : studioMessages;
     const setter = target === "main" ? setMessages : setStudioMessages;
     const setInput = target === "main" ? setChatInput : setStudioInput;
@@ -205,27 +206,93 @@ function App() {
     setter(newMessages);
     setInput("");
     setBusy(true);
+
+    let streamStarted = false;
     try {
       const context = target === "studio" ? transcript.trim() : "";
-      const data = await apiJson("/api/chat", {
+      const response = await fetch(API_BASE + "/api/chat", {
         method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
         body: JSON.stringify({
           messages: newMessages.slice(-18).map((message) => ({ role: message.role, content: message.content })),
           context: context || null,
         }),
       });
-      setter((current) => [...current, { role: "assistant", content: data.reply || "Ron returned an empty answer." }]);
+
+      if (!response.ok) {
+        let detail = "Request failed (" + response.status + ")";
+        try {
+          const body = await response.json();
+          detail = body.detail || detail;
+        } catch { /* non-JSON error */ }
+        throw new Error(detail);
+      }
+      if (!response.body) throw new Error("Streaming is not available in this browser.");
+
+      setter((current) => [...current, { role: "assistant", content: "", streaming: true }]);
+      streamStarted = true;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finished = false;
+
+      while (!finished) {
+        const result = await reader.read();
+        buffer += decoder.decode(result.value || new Uint8Array(), { stream: !result.done });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+
+        for (const rawEvent of events) {
+          const dataLine = rawEvent.split("\n").find((line) => line.startsWith("data:"));
+          if (!dataLine) continue;
+          const data = dataLine.slice(5).trim();
+          if (data === "[DONE]") {
+            finished = true;
+            break;
+          }
+          let payload;
+          try { payload = JSON.parse(data); } catch { continue; }
+          if (payload.error) throw new Error(payload.error);
+          if (payload.delta) {
+            setter((current) => {
+              const updated = [...current];
+              const last = updated[updated.length - 1];
+              if (last?.streaming) updated[updated.length - 1] = { ...last, content: last.content + payload.delta };
+              return updated;
+            });
+          }
+        }
+        if (result.done) finished = true;
+      }
+
+      setter((current) => {
+        const updated = [...current];
+        const last = updated[updated.length - 1];
+        if (last?.streaming) updated[updated.length - 1] = { ...last, streaming: false };
+        return updated;
+      });
     } catch (error) {
-      setter((current) => [...current, {
-        role: "assistant",
-        content: "I couldn’t reach the AI service: " + error.message + ". Check that FastAPI is running and backend/.env has a valid XAI_API_KEY and model name.",
-        isError: true,
-      }]);
+      setter((current) => {
+        const updated = [...current];
+        const last = updated[updated.length - 1];
+        const detail = "Connection issue: " + error.message;
+        if (streamStarted && last?.streaming) {
+          updated[updated.length - 1] = {
+            ...last,
+            content: last.content ? last.content + "\n\n" + detail : detail,
+            streaming: false,
+            isError: true,
+          };
+        } else {
+          updated.push({ role: "assistant", content: detail + ". Check that FastAPI is running and backend/.env has a valid GROQ_API_KEY and model name.", isError: true });
+        }
+        return updated;
+      });
     } finally {
       setBusy(false);
     }
   }
-
   function organiseTranscript() {
     const result = transcriptPack(transcript);
     if (!result) { flash("Paste a lecture transcript first."); return; }
@@ -358,7 +425,7 @@ function App() {
             <div className="section-heading"><div><p className="eyebrow">YOUR NEXT MOVE</p><h2>Study with fewer switches.</h2></div><button className="text-link" onClick={() => navigate("studio")}>Open Study Studio <ArrowUpRight size={14} /></button></div>
             <div className="feature-grid">
               <button className="feature-card" onClick={() => navigate("studio")}><span className="feature-icon"><BookOpen size={22} /></span><b>Study Studio</b><p>YouTube lecture, Ron, notes, and important problems in one workspace.</p><small>OPEN STUDIO ↗</small></button>
-              <button className="feature-card" onClick={() => navigate("ai")}><span className="feature-icon"><Sparkles size={22} /></span><b>Talk to Ron</b><p>Get live Grok-powered study explanations once your API key is configured.</p><small>CHAT WITH RON ↗</small></button>
+              <button className="feature-card" onClick={() => navigate("ai")}><span className="feature-icon"><Sparkles size={22} /></span><b>Talk to Ron</b><p>Get live Groq-powered study explanations once your API key is configured.</p><small>CHAT WITH RON ↗</small></button>
               <button className="feature-card" onClick={() => navigate("focus")}><span className="feature-icon"><Target size={22} /></span><b>Focus Mode</b><p>Set an intention, run a timer, and enter distraction-reduced fullscreen.</p><small>START FOCUS ↗</small></button>
             </div>
             <div className="notice"><CircleHelp size={18} /><div><b>Know what is connected</b><p>Ron uses your FastAPI backend. Study packs can sync to the API database; a browser-only fallback is used when the API is unavailable.</p></div></div>
@@ -405,7 +472,7 @@ function App() {
                 ["Build a short study plan", "Make me a 45-minute JEE study plan for one chapter."],
                 ["Analyse mistakes", "Give me a method to analyse my mistakes after solving a question."],
                 ["Revise a lecture", "Help me revise a lecture using notes, formulas, and practice questions."],
-              ].map(([title, prompt]) => <button key={title} className="prompt-button" onClick={() => { setChatInput(prompt); navigate("ai"); window.setTimeout(() => document.getElementById("ron-main-input")?.focus(), 50); }}><span>{title}</span><ArrowUpRight size={14} /></button>)}</div><div className="boundary"><Sparkles size={18} /><div><b>What’s connected?</b><p>The FastAPI server sends requests to xAI’s API. Keep the xAI key only on the server in <code>backend/.env</code>.</p></div></div></aside>
+              ].map(([title, prompt]) => <button key={title} className="prompt-button" onClick={() => { setChatInput(prompt); navigate("ai"); window.setTimeout(() => document.getElementById("ron-main-input")?.focus(), 50); }}><span>{title}</span><ArrowUpRight size={14} /></button>)}</div><div className="boundary"><Sparkles size={18} /><div><b>What’s connected?</b><p>The FastAPI server sends requests to Groq. Keep the Groq key only on the server in <code>backend/.env</code>.</p></div></div></aside>
             </div>
           </section>
         )}
@@ -425,7 +492,7 @@ function App() {
 
         {page === "settings" && (
           <section className="page"><div className="page-heading"><p className="eyebrow">— SYSTEM STATUS</p><h1>Workspace <em>settings.</em></h1><p className="sub">Check service connectivity and configure your local environment.</p></div>
-            <article className="panel settings-panel"><div className="settings-row"><div className="setting-symbol"><Activity size={18} /></div><div><b>FastAPI backend</b><p>{apiStatus === "online" ? "Reachable at the configured API base URL." : "Not reachable. Start the backend on port 8000 and check VITE_API_BASE_URL."}</p></div><span className={"settings-status " + (apiStatus === "online" ? "connected" : "")}>{apiStatus === "online" ? "CONNECTED" : apiStatus === "checking" ? "CHECKING" : "OFFLINE"}</span></div><div className="settings-row"><div className="setting-symbol"><BrainCircuit size={18} /></div><div><b>Grok / xAI</b><p>Configure XAI_API_KEY and XAI_MODEL in backend/.env. The key is never sent to the browser.</p></div><span className="settings-status">SERVER ENV</span></div><div className="settings-row"><div className="setting-symbol"><BookMarked size={18} /></div><div><b>Study packs</b><p>Persistent API saves use SQLite. If the API is offline, this browser stores a fallback copy.</p></div><span className="settings-status">{packs.length} SAVED</span></div><div className="settings-warning"><CircleHelp size={18} /><p><b>Before public production:</b> add authentication and per-user data isolation, rate limits, request quotas, migrations and a managed database. The included SQLite endpoints are a functional starter, not yet a multi-user SaaS security layer.</p></div><div className="inline-actions settings-actions"><button className="secondary" onClick={() => { setApiStatus("checking"); apiJson("/api/health").then(() => { setApiStatus("online"); flash("Backend is reachable."); }).catch(() => { setApiStatus("offline"); flash("Backend is not reachable."); }); }}><RotateCcw size={14} /> Recheck connection</button><button className="quiet" onClick={() => { if (confirm("Clear browser-only fallback study packs? This will not delete backend packs.")) { const localOnly = packs.filter((pack) => !pack.local_only && !String(pack.id).startsWith("local-")); setPacks(localOnly); localStorage.setItem(LOCAL_KEY, JSON.stringify(localOnly)); flash("Browser fallback copies cleared."); } }}><Trash2 size={14} /> Clear local fallback</button></div></article>
+            <article className="panel settings-panel"><div className="settings-row"><div className="setting-symbol"><Activity size={18} /></div><div><b>FastAPI backend</b><p>{apiStatus === "online" ? "Reachable at the configured API base URL." : "Not reachable. Start the backend on port 8000 and check VITE_API_BASE_URL."}</p></div><span className={"settings-status " + (apiStatus === "online" ? "connected" : "")}>{apiStatus === "online" ? "CONNECTED" : apiStatus === "checking" ? "CHECKING" : "OFFLINE"}</span></div><div className="settings-row"><div className="setting-symbol"><BrainCircuit size={18} /></div><div><b>Groq · GPT-OSS 120B</b><p>Configure GROQ_API_KEY and GROQ_MODEL in backend/.env. The key is never sent to the browser.</p></div><span className="settings-status">SERVER ENV</span></div><div className="settings-row"><div className="setting-symbol"><BookMarked size={18} /></div><div><b>Study packs</b><p>Persistent API saves use SQLite. If the API is offline, this browser stores a fallback copy.</p></div><span className="settings-status">{packs.length} SAVED</span></div><div className="settings-warning"><CircleHelp size={18} /><p><b>Before public production:</b> add authentication and per-user data isolation, rate limits, request quotas, migrations and a managed database. The included SQLite endpoints are a functional starter, not yet a multi-user SaaS security layer.</p></div><div className="inline-actions settings-actions"><button className="secondary" onClick={() => { setApiStatus("checking"); apiJson("/api/health").then(() => { setApiStatus("online"); flash("Backend is reachable."); }).catch(() => { setApiStatus("offline"); flash("Backend is not reachable."); }); }}><RotateCcw size={14} /> Recheck connection</button><button className="quiet" onClick={() => { if (confirm("Clear browser-only fallback study packs? This will not delete backend packs.")) { const localOnly = packs.filter((pack) => !pack.local_only && !String(pack.id).startsWith("local-")); setPacks(localOnly); localStorage.setItem(LOCAL_KEY, JSON.stringify(localOnly)); flash("Browser fallback copies cleared."); } }}><Trash2 size={14} /> Clear local fallback</button></div></article>
           </section>
         )}
 

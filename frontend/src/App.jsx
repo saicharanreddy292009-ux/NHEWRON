@@ -197,6 +197,7 @@ function App() {
     event.preventDefault();
     const value = (target === "main" ? chatInput : studioInput).trim();
     if (!value || (target === "main" ? sending : studioSending)) return;
+
     const currentMessages = target === "main" ? messages : studioMessages;
     const setter = target === "main" ? setMessages : setStudioMessages;
     const setInput = target === "main" ? setChatInput : setStudioInput;
@@ -205,27 +206,93 @@ function App() {
     setter(newMessages);
     setInput("");
     setBusy(true);
+
+    let streamStarted = false;
     try {
       const context = target === "studio" ? transcript.trim() : "";
-      const data = await apiJson("/api/chat", {
+      const response = await fetch(API_BASE + "/api/chat", {
         method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
         body: JSON.stringify({
           messages: newMessages.slice(-18).map((message) => ({ role: message.role, content: message.content })),
           context: context || null,
         }),
       });
-      setter((current) => [...current, { role: "assistant", content: data.reply || "Ron returned an empty answer." }]);
+
+      if (!response.ok) {
+        let detail = "Request failed (" + response.status + ")";
+        try {
+          const body = await response.json();
+          detail = body.detail || detail;
+        } catch { /* non-JSON error */ }
+        throw new Error(detail);
+      }
+      if (!response.body) throw new Error("Streaming is not available in this browser.");
+
+      setter((current) => [...current, { role: "assistant", content: "", streaming: true }]);
+      streamStarted = true;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finished = false;
+
+      while (!finished) {
+        const result = await reader.read();
+        buffer += decoder.decode(result.value || new Uint8Array(), { stream: !result.done });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+
+        for (const rawEvent of events) {
+          const dataLine = rawEvent.split("\n").find((line) => line.startsWith("data:"));
+          if (!dataLine) continue;
+          const data = dataLine.slice(5).trim();
+          if (data === "[DONE]") {
+            finished = true;
+            break;
+          }
+          let payload;
+          try { payload = JSON.parse(data); } catch { continue; }
+          if (payload.error) throw new Error(payload.error);
+          if (payload.delta) {
+            setter((current) => {
+              const updated = [...current];
+              const last = updated[updated.length - 1];
+              if (last?.streaming) updated[updated.length - 1] = { ...last, content: last.content + payload.delta };
+              return updated;
+            });
+          }
+        }
+        if (result.done) finished = true;
+      }
+
+      setter((current) => {
+        const updated = [...current];
+        const last = updated[updated.length - 1];
+        if (last?.streaming) updated[updated.length - 1] = { ...last, streaming: false };
+        return updated;
+      });
     } catch (error) {
-      setter((current) => [...current, {
-        role: "assistant",
-        content: "I couldn’t reach the AI service: " + error.message + ". Check that FastAPI is running and backend/.env has a valid XAI_API_KEY and model name.",
-        isError: true,
-      }]);
+      setter((current) => {
+        const updated = [...current];
+        const last = updated[updated.length - 1];
+        const detail = "Connection issue: " + error.message;
+        if (streamStarted && last?.streaming) {
+          updated[updated.length - 1] = {
+            ...last,
+            content: last.content ? last.content + "\n\n" + detail : detail,
+            streaming: false,
+            isError: true,
+          };
+        } else {
+          updated.push({ role: "assistant", content: detail + ". Check that FastAPI is running and backend/.env has a valid GROQ_API_KEY and model name.", isError: true });
+        }
+        return updated;
+      });
     } finally {
       setBusy(false);
     }
   }
-
   function organiseTranscript() {
     const result = transcriptPack(transcript);
     if (!result) { flash("Paste a lecture transcript first."); return; }

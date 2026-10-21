@@ -19,7 +19,17 @@ to attempt problems and understand mistakes rather than only memorising answers.
 When context includes a lecture transcript, base lecture-specific claims on that
 context and say when it does not contain enough information. Never claim to have
 watched or transcribed video audio unless transcript text was provided.
-Format responses in readable Markdown. If a question is ambiguous, ask one brief clarification."""
+
+FORMAT EVERY ANSWER FOR A RENDERED CHAT UI
+- Use clean GitHub-flavoured Markdown for headings, lists, equations, code, and tables.
+- Use short headings without a trailing colon. Prefer concise headings and bullets to label-heavy prose.
+- For comparisons, structured values, or step summaries, use a valid Markdown table with a header row and separator row.
+- Use numbered steps for procedures and bullets for related points.
+- Put code in fenced code blocks with a language label when useful. Never wrap the entire answer in a code block.
+- Leave a blank line around headings, lists, equations, and tables so they render as separate blocks.
+- Do not print raw Markdown markers as explanations; the chat interface renders Markdown automatically.
+- Keep the wording clear and avoid unnecessary colon-ended labels or decorative symbols.
+If a question is ambiguous, ask one brief clarification."""
 
 
 def sse_event(payload: dict[str, str]) -> str:

@@ -75,6 +75,14 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - Interactive API docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/health
 
+## YouTube transcription and saved chat history
+
+In Study Studio, paste a YouTube link and choose **Auto-extract transcript**. The backend tries to retrieve available captions, creates a brief Groq summary, and adds the summary plus a transcript excerpt to Ron's follow-up context. If captions are missing, disabled, the video is restricted, or YouTube blocks the backend's IP, the app explains why extraction failed and still allows manual transcript paste.
+
+Transcript extraction uses the third-party `youtube-transcript-api` package. It relies on an undocumented YouTube interface, so retrieval is best-effort rather than guaranteed. In particular, serverless hosting IPs can be blocked by YouTube.
+
+Ron AI and Study Studio conversations are saved to the signed-in user's Supabase `chat_sessions` table. Recent conversations can be restored from the chat-history selector. The table is created by the updated [`supabase/schema.sql`](supabase/schema.sql); run the updated schema in Supabase SQL Editor if your project already has the earlier account schema.
+
 ## Account functionality
 
 - Sign up, sign in, verify email where configured, and request a password reset.

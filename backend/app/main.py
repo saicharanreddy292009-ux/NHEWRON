@@ -2,7 +2,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.routes import chat, profile, study_packs
+from app.routes import chat, chat_history, profile, study_packs, youtube
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
@@ -22,8 +22,10 @@ app.add_middleware(
 )
 
 app.include_router(chat.router)
+app.include_router(chat_history.router)
 app.include_router(profile.router)
 app.include_router(study_packs.router)
+app.include_router(youtube.router)
 
 @app.get("/", tags=["system"])
 async def root() -> dict[str, str]:

@@ -4,8 +4,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, BookMarked, BookOpen, BrainCircuit,
-  Check, ChevronRight, CircleHelp, Clock3, ExternalLink, FileText, Focus,
-  LayoutDashboard, LoaderCircle, Menu, MessageCircle, NotebookPen, Pause, Play,
+  Check, ChevronRight, CircleHelp, Clock3, ExternalLink, Eye, EyeOff, FileText, Focus,
+  History, LayoutDashboard, LoaderCircle, Menu, MessageCircle, NotebookPen, Pause, Play,
   Plus, RotateCcw, Send, Settings, Sparkles, Sun, Moon, Target, Trash2, X
 } from "lucide-react";
 import logo from "../nhewron-mark.png";
@@ -120,6 +120,17 @@ function App() {
   const [accountBusy, setAccountBusy] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
+  const [chatHistory, setChatHistory] = useState([]);
+  const [studioHistory, setStudioHistory] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [activeStudioChatId, setActiveStudioChatId] = useState(null);
+  const [extractingTranscript, setExtractingTranscript] = useState(false);
+  const [transcriptSummary, setTranscriptSummary] = useState("");
+  const [transcriptLanguage, setTranscriptLanguage] = useState("");
+  const [transcriptIsGenerated, setTranscriptIsGenerated] = useState(false);
+  const [transcriptExtractionError, setTranscriptExtractionError] = useState("");
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [theme, setTheme] = useState(() => {
     try {
@@ -223,6 +234,12 @@ function App() {
         }
       })
       .catch((error) => { if (alive) flash(error.message || "Could not load profile."); });
+    requestApi("/api/chat-history?mode=ai")
+      .then((data) => { if (alive) setChatHistory(Array.isArray(data.items) ? data.items : []); })
+      .catch(() => {});
+    requestApi("/api/chat-history?mode=studio")
+      .then((data) => { if (alive) setStudioHistory(Array.isArray(data.items) ? data.items : []); })
+      .catch(() => {});
     return () => { alive = false; };
   }, [session?.user?.id, requestApi, localStorageKey]);
 
@@ -273,7 +290,127 @@ function App() {
       return;
     }
     setVideoId(parsed);
-    flash("Lecture loaded. If embedding is disabled, open it directly on YouTube.");
+    setTranscriptExtractionError("");
+    flash("Lecture loaded. Use Auto-extract transcript to retrieve available captions.");
+  }
+
+  async function extractTranscript() {
+    const parsed = youtubeId(videoUrl);
+    if (!parsed) {
+      setVideoId("");
+      setTranscriptExtractionError("Paste a valid YouTube link first.");
+      flash("Paste a valid YouTube link first.");
+      return;
+    }
+    setVideoId(parsed);
+    setExtractingTranscript(true);
+    setTranscriptExtractionError("");
+    try {
+      const result = await requestApi("/api/youtube/transcript", {
+        method: "POST",
+        body: JSON.stringify({ youtube_url: videoUrl.trim() }),
+      });
+      setTranscript(result.transcript || "");
+      setTranscriptSummary(result.summary || "");
+      setTranscriptLanguage(result.language || "Unknown");
+      setTranscriptIsGenerated(Boolean(result.is_generated));
+      setNotes((current) => current.trim() ? current : (result.summary || ""));
+      const historySaved = await persistChatHistory("studio", studioMessages, {
+        source_url: videoUrl.trim(),
+        transcript: result.transcript || "",
+        summary: result.summary || "",
+      });
+      setTranscriptExtractionError([
+        result.summary_error || "",
+        historySaved ? "" : "Transcript extracted, but saved chat history is unavailable until the updated Supabase schema is applied.",
+      ].filter(Boolean).join(" "));
+      if (result.transcript_truncated) {
+        flash("Transcript extracted. It was shortened to fit the study workspace.");
+      } else {
+        flash("Transcript extracted. Ron can now answer questions about this video.");
+      }
+    } catch (error) {
+      const detail = error.message || "The transcript could not be extracted.";
+      setTranscriptExtractionError(detail);
+      flash(detail);
+    } finally {
+      setExtractingTranscript(false);
+    }
+  }
+
+  function startNewChat(target = "main") {
+    if (target === "studio") {
+      setStudioMessages([{ role: "assistant", content: "Ask a follow-up question about the video transcript or its summary." }]);
+      setActiveStudioChatId(null);
+      setTranscript("");
+      setTranscriptSummary("");
+      setTranscriptLanguage("");
+      setTranscriptIsGenerated(false);
+      setTranscriptExtractionError("");
+    } else {
+      setMessages([{ role: "assistant", content: GREETING }]);
+      setActiveChatId(null);
+    }
+  }
+
+  async function loadChatSession(sessionId, target = "main") {
+    if (!sessionId) return;
+    try {
+      const saved = await requestApi("/api/chat-history/" + encodeURIComponent(sessionId));
+      const restored = Array.isArray(saved.messages) ? saved.messages.map(({ role, content }) => ({ role, content })) : [];
+      if (target === "studio") {
+        setStudioMessages(restored.length ? restored : [{ role: "assistant", content: "Ask a follow-up about this video." }]);
+        setActiveStudioChatId(saved.id);
+        setVideoUrl(saved.source_url || "");
+        setVideoId(youtubeId(saved.source_url || "") || "");
+        setTranscript(saved.transcript || "");
+        setTranscriptSummary(saved.summary || "");
+        navigate("studio");
+      } else {
+        setMessages(restored.length ? restored : [{ role: "assistant", content: GREETING }]);
+        setActiveChatId(saved.id);
+        navigate("ai");
+      }
+      flash("Chat history restored.");
+    } catch (error) {
+      flash(error.message || "Could not restore this conversation.");
+    }
+  }
+
+  async function persistChatHistory(target, finalMessages, metadata = {}) {
+    const isStudio = target === "studio";
+    const activeId = isStudio ? activeStudioChatId : activeChatId;
+    const firstQuestion = finalMessages.find((item) => item.role === "user")?.content || "";
+    const sourceUrl = metadata.source_url !== undefined ? metadata.source_url : (isStudio ? (videoUrl.trim() || null) : null);
+    const savedTranscript = metadata.transcript !== undefined ? metadata.transcript : (isStudio ? transcript : "");
+    const savedSummary = metadata.summary !== undefined ? metadata.summary : (isStudio ? transcriptSummary : "");
+    const payload = {
+      mode: isStudio ? "studio" : "ai",
+      title: firstQuestion.trim().replace(/\s+/g, " ").slice(0, 72) || (isStudio ? "YouTube study session" : "Ron AI conversation"),
+      source_url: sourceUrl || null,
+      transcript: (savedTranscript || "").slice(0, 100000),
+      summary: (savedSummary || "").slice(0, 12000),
+      messages: finalMessages
+        .filter((item) => (item.role === "user" || item.role === "assistant") && String(item.content || "").trim())
+        .slice(-100)
+        .map((item) => ({ role: item.role, content: String(item.content).slice(0, 12000) })),
+    };
+    try {
+      const saved = activeId
+        ? await requestApi("/api/chat-history/" + encodeURIComponent(activeId), { method: "PUT", body: JSON.stringify(payload) })
+        : await requestApi("/api/chat-history", { method: "POST", body: JSON.stringify(payload) });
+      if (isStudio) {
+        setActiveStudioChatId(saved.id);
+        setStudioHistory((current) => [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 30));
+      } else {
+        setActiveChatId(saved.id);
+        setChatHistory((current) => [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 30));
+      }
+      return true;
+    } catch (error) {
+      flash("Reply received, but chat history could not be saved. " + (error.message || "Check the chat history database setup."));
+      return false;
+    }
   }
 
   async function sendChat(event, target = "main") {
@@ -292,7 +429,12 @@ function App() {
 
     let streamStarted = false;
     try {
-      const context = target === "studio" ? transcript.trim() : "";
+      const context = target === "studio"
+        ? [
+            transcriptSummary ? "VIDEO SUMMARY\n" + transcriptSummary : "",
+            transcript ? "TRANSCRIPT EXCERPT\n" + transcript.slice(0, 8500) : "",
+          ].filter(Boolean).join("\n\n").slice(0, 12000)
+        : "";
       const response = await fetch(API_BASE + "/api/chat", {
         method: "POST",
         headers: {
@@ -322,6 +464,7 @@ function App() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let assistantContent = "";
       let finished = false;
 
       while (!finished) {
@@ -342,6 +485,7 @@ function App() {
           try { payload = JSON.parse(data); } catch { continue; }
           if (payload.error) throw new Error(payload.error);
           if (payload.delta) {
+            assistantContent += payload.delta;
             setter((current) => {
               const updated = [...current];
               const last = updated[updated.length - 1];
@@ -359,6 +503,9 @@ function App() {
         if (last?.streaming) updated[updated.length - 1] = { ...last, streaming: false };
         return updated;
       });
+      if (assistantContent.trim()) {
+        await persistChatHistory(target, [...newMessages, { role: "assistant", content: assistantContent }]);
+      }
     } catch (error) {
       setter((current) => {
         const updated = [...current];
@@ -624,7 +771,7 @@ function App() {
           <section className="page">
             <div className="page-heading"><p className="eyebrow">— STUDY STUDIO</p><h1>Watch. Understand. <em>Practice.</em></h1><p className="sub">Keep your lecture, AI companion, and study notes in one workspace.</p></div>
             <article className="panel source-panel"><div className="panel-top"><div><span className="label">LECTURE SOURCE</span><h3>Bring your YouTube lecture</h3></div><span className="small-pill"><Play size={13} /> PRIVACY-ENHANCED PLAYER</span></div>
-              <form className="youtube-form" onSubmit={(event) => { event.preventDefault(); loadVideo(); }}><input className="input" value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="Paste a YouTube video URL…" aria-label="YouTube video URL" /><button className="primary"><Play size={14} /> Load lecture</button></form>
+              <form className="youtube-form" onSubmit={(event) => { event.preventDefault(); loadVideo(); }}><input className="input" value={videoUrl} onChange={(event) => { setVideoUrl(event.target.value); setTranscriptExtractionError(""); }} placeholder="Paste a YouTube video URL…" aria-label="YouTube video URL" /><button className="secondary"><Play size={14} /> Load lecture</button><button type="button" className="primary" onClick={extractTranscript} disabled={extractingTranscript || !videoUrl.trim()}>{extractingTranscript ? <LoaderCircle className="spin" size={14} /> : <FileText size={14} />}{extractingTranscript ? "Extracting…" : "Auto-extract transcript"}</button></form>
               <p className="hint">Videos that disallow embeds or are age-restricted may only play on YouTube. Use the direct link if the player shows an error.</p>
             </article>
             <div className="studio-grid">
@@ -634,7 +781,9 @@ function App() {
                     {videoId ? <iframe key={videoId} title="YouTube study lecture" src={"https://www.youtube-nocookie.com/embed/" + videoId + "?rel=0&playsinline=1"} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen /> : <div className="video-placeholder"><span><Play size={26} fill="currentColor" /></span><b>Your lecture appears here</b><small>Paste a link above to begin.</small></div>}
                   </div>
                   {videoId && <div className="video-fallback"><p className="hint">If playback is blocked, the owner may have disabled embedding or the video may have age restrictions.</p><a className="secondary" href={"https://www.youtube.com/watch?v=" + videoId} target="_blank" rel="noopener noreferrer">Open on YouTube <ExternalLink size={13} /></a></div>}
-                  <div className="transcript-section"><label className="field-label" htmlFor="transcript">LECTURE TRANSCRIPT (OPTIONAL)</label><textarea id="transcript" className="input area" rows={5} value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder="Paste captions or a transcript here. Ron can use this text as context." /><div className="inline-actions"><button className="secondary" onClick={organiseTranscript}><Sparkles size={14} /> Organise transcript</button><button className="quiet" onClick={() => setTranscript("")}>Clear</button></div><p className="hint">Transcript organisation is a local draft. NHEWRON does not automatically listen to or transcribe video audio.</p></div>
+                  {transcriptExtractionError && <div className="transcript-alert" role="status"><CircleHelp size={16} /><span>{transcriptExtractionError}</span></div>}
+                  {transcriptSummary && <article className="panel transcript-summary"><div className="panel-top"><div><span className="label">VIDEO SUMMARY</span><h3>Key ideas from this lecture</h3></div><span className="small-pill">{transcriptLanguage || "Transcript"}{transcriptIsGenerated ? " · auto captions" : " · captions"}</span></div><div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{transcriptSummary}</ReactMarkdown></div><p className="hint">Ask Ron a follow-up in the panel. The summary and a transcript excerpt are included as context.</p></article>}
+                  <div className="transcript-section"><label className="field-label" htmlFor="transcript">VIDEO TRANSCRIPT</label><textarea id="transcript" className="input area" rows={7} value={transcript} onChange={(event) => { setTranscript(event.target.value); }} placeholder="Extract captions automatically, or paste a transcript here." /><div className="inline-actions"><button type="button" className="secondary" onClick={organiseTranscript}><Sparkles size={14} /> Organise transcript</button><button type="button" className="quiet" onClick={() => { setTranscript(""); setTranscriptSummary(""); setTranscriptLanguage(""); setTranscriptExtractionError(""); }}>Clear</button></div><p className="hint">Only captions available through YouTube can be extracted. Private, age-restricted, caption-disabled, or blocked videos may require a manual transcript.</p></div>
                 </article>
                 <div className="section-heading study-pack-heading"><div><p className="eyebrow">BUILT FROM THE LECTURE</p><h2>Your study pack</h2></div><div className="inline-actions"><button className="secondary" onClick={savePack}><BookMarked size={14} /> Save pack</button><button className="secondary" onClick={() => window.print()}><FileText size={14} /> Export PDF</button><button className="quiet" onClick={() => downloadText(currentPack())}><ArrowDownToLine size={14} /> TXT</button></div></div>
                 <div className="output-grid">
@@ -644,6 +793,7 @@ function App() {
                 </div>
               </div>
               <aside className="panel ron-panel"><div className="ron-header"><div className="ron-avatar"><Sparkles size={18} /></div><div><h3>Ron <span>AI companion</span></h3><small><i className={"status-dot " + (apiStatus === "online" ? "dot-on" : "")} /> {apiStatus === "online" ? "API REACHABLE" : "CHECK API CONNECTION"}</small></div></div>
+                <ChatHistoryBar history={studioHistory} activeId={activeStudioChatId} onSelect={(id) => loadChatSession(id, "studio")} onNew={() => startNewChat("studio")} label="Video chat history" />
                 <ChatLog messages={studioMessages} busy={studioSending} endRef={studioEndRef} />
                 <form className="chat-form" onSubmit={(event) => sendChat(event, "studio")}><input className="input" value={studioInput} onChange={(event) => setStudioInput(event.target.value)} placeholder="Ask about this lecture…" aria-label="Ask Ron about this lecture" /><button className="primary send-button" aria-label="Send message" disabled={studioSending || !studioInput.trim()}><Send size={15} /></button></form>
                 <p className="hint">When you ask about this lecture, the pasted transcript is included in the API request as context.</p>
@@ -654,7 +804,7 @@ function App() {
 
         {page === "ai" && (
           <section className="page"><div className="page-heading"><p className="eyebrow">— YOUR AI COMPANION</p><h1>Meet <em>Ron.</em></h1><p className="sub">Ask doubts, revise concepts, and make the next step clear.</p></div>
-            <div className="ai-layout"><article className="panel ai-chat-panel"><div className="ron-header"><div className="ron-avatar large"><Sparkles size={20} /></div><div><h3>Ron <span>Learning companion</span></h3><small><i className={"status-dot " + (apiStatus === "online" ? "dot-on" : "")} /> {apiStatus === "online" ? "FASTAPI CONNECTED" : "API OFFLINE / NOT CONFIGURED"}</small></div></div><ChatLog messages={messages} busy={sending} endRef={chatEndRef} /><form className="chat-form main-chat-form" onSubmit={(event) => sendChat(event, "main")}><input id="ron-main-input" className="input" value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="Message Ron…" aria-label="Message Ron" /><button className="primary send-button" disabled={sending || !chatInput.trim()} aria-label="Send message">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button></form></article>
+            <div className="ai-layout"><article className="panel ai-chat-panel"><div className="ron-header"><div className="ron-avatar large"><Sparkles size={20} /></div><div><h3>Ron <span>Learning companion</span></h3><small><i className={"status-dot " + (apiStatus === "online" ? "dot-on" : "")} /> {apiStatus === "online" ? "FASTAPI CONNECTED" : "API OFFLINE / NOT CONFIGURED"}</small></div></div><ChatHistoryBar history={chatHistory} activeId={activeChatId} onSelect={(id) => loadChatSession(id, "main")} onNew={() => startNewChat("main")} label="Ron chat history" /><ChatLog messages={messages} busy={sending} endRef={chatEndRef} /><form className="chat-form main-chat-form" onSubmit={(event) => sendChat(event, "main")}><input id="ron-main-input" className="input" value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="Message Ron…" aria-label="Message Ron" /><button className="primary send-button" disabled={sending || !chatInput.trim()} aria-label="Send message">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button></form></article>
               <aside className="panel prompt-panel"><span className="label">TRY ASKING RON</span><h3>Start with a prompt</h3><div className="prompt-list">{[
                 ["Explain a concept from basics", "Explain electric field from first principles, step by step."],
                 ["Build a short study plan", "Make me a 45-minute JEE study plan for one chapter."],
@@ -713,8 +863,8 @@ function App() {
                 <article className="panel profile-card">
                   <div className="profile-section-title"><div><h3>Password & security</h3><p>Choose a strong password for your account.</p></div><Settings size={18} /></div>
                   <form className="profile-form password-form" onSubmit={changePassword}>
-                    <label className="profile-field"><span>New password</span><input className="input" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={8} autoComplete="new-password" placeholder="At least 8 characters" required /></label>
-                    <label className="profile-field"><span>Confirm new password</span><input className="input" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={8} autoComplete="new-password" placeholder="Enter it again" required /></label>
+                    <label className="profile-field"><span>New password</span><div className="password-input-wrap"><input className="input" type={showNewPassword ? "text" : "password"} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={8} autoComplete="new-password" placeholder="At least 8 characters" required /><button type="button" className="password-visibility" onClick={() => setShowNewPassword((value) => !value)} aria-label={showNewPassword ? "Hide new password" : "Show new password"} title={showNewPassword ? "Hide password" : "Show password"}>{showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+                    <label className="profile-field"><span>Confirm new password</span><div className="password-input-wrap"><input className="input" type={showConfirmNewPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={8} autoComplete="new-password" placeholder="Enter it again" required /><button type="button" className="password-visibility" onClick={() => setShowConfirmNewPassword((value) => !value)} aria-label={showConfirmNewPassword ? "Hide confirmation password" : "Show confirmation password"} title={showConfirmNewPassword ? "Hide password" : "Show password"}>{showConfirmNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
                     <div className="profile-actions"><button type="submit" className="secondary" disabled={accountBusy || !newPassword || !confirmPassword}>Update password</button></div>
                   </form>
                 </article>
@@ -750,6 +900,8 @@ function AuthScreen({ configured }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -849,8 +1001,8 @@ function AuthScreen({ configured }) {
           <form className="auth-form" onSubmit={submit}>
             {mode === "signup" && <label className="profile-field"><span>Full name</span><input className="input" value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="How should we call you?" autoComplete="name" maxLength={100} required /></label>}
             <label className="profile-field"><span>Email address</span><input className="input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" autoComplete="email" required /></label>
-            <label className="profile-field"><span>Password</span><input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} required /></label>
-            {mode === "signup" && <label className="profile-field"><span>Confirm password</span><input className="input" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Enter password again" autoComplete="new-password" minLength={8} required /></label>}
+            <label className="profile-field"><span>Password</span><div className="password-input-wrap"><input className="input" type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} required /><button type="button" className="password-visibility" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"} title={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+            {mode === "signup" && <label className="profile-field"><span>Confirm password</span><div className="password-input-wrap"><input className="input" type={showConfirmPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Enter password again" autoComplete="new-password" minLength={8} required /><button type="button" className="password-visibility" onClick={() => setShowConfirmPassword((value) => !value)} aria-label={showConfirmPassword ? "Hide confirmation password" : "Show confirmation password"} title={showConfirmPassword ? "Hide password" : "Show password"}>{showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>}
             <button className="primary auth-submit" type="submit" disabled={busy || !configured}>{busy ? <LoaderCircle className="spin" size={16} /> : null}{mode === "signin" ? "Sign in" : "Create account"}<ChevronRight size={16} /></button>
           </form>
 
@@ -860,6 +1012,15 @@ function AuthScreen({ configured }) {
         </div>
       </section>
     </main>
+  );
+}
+
+function ChatHistoryBar({ history, activeId, onSelect, onNew, label }) {
+  return (
+    <div className="chat-history-toolbar">
+      <div className="chat-history-select"><History size={14} /><select aria-label={label} value={activeId || ""} onChange={(event) => onSelect(event.target.value)}><option value="">Recent chats</option>{history.map((item) => <option key={item.id} value={item.id}>{item.title || (item.mode === "studio" ? "Video study" : "Ron AI")} · {new Date(item.updated_at || item.created_at).toLocaleDateString()}</option>)}</select></div>
+      <button type="button" className="quiet new-chat-button" onClick={onNew}><Plus size={13} /> New chat</button>
+    </div>
   );
 }
 

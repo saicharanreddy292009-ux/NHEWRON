@@ -77,3 +77,35 @@ create policy "Users can delete their study packs"
   on public.study_packs for delete to authenticated using (auth.uid() = user_id);
 
 -- Do not expose the service-role key in frontend environment variables or browser code.
+
+-- Saved Ron conversations, including video study sessions, scoped to each account.
+create table if not exists public.chat_sessions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  mode text not null check (mode in ('ai', 'studio')),
+  title text not null,
+  source_url text,
+  transcript text not null default '',
+  summary text not null default '',
+  messages jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists chat_sessions_user_mode_updated_idx
+  on public.chat_sessions (user_id, mode, updated_at desc);
+
+alter table public.chat_sessions enable row level security;
+drop policy if exists "Users can read their chat sessions" on public.chat_sessions;
+create policy "Users can read their chat sessions"
+  on public.chat_sessions for select to authenticated using (auth.uid() = user_id);
+drop policy if exists "Users can create their chat sessions" on public.chat_sessions;
+create policy "Users can create their chat sessions"
+  on public.chat_sessions for insert to authenticated with check (auth.uid() = user_id);
+drop policy if exists "Users can update their chat sessions" on public.chat_sessions;
+create policy "Users can update their chat sessions"
+  on public.chat_sessions for update to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists "Users can delete their chat sessions" on public.chat_sessions;
+create policy "Users can delete their chat sessions"
+  on public.chat_sessions for delete to authenticated using (auth.uid() = user_id);
+

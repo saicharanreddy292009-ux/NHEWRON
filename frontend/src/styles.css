@@ -427,3 +427,41 @@ footer{display:flex;justify-content:space-between;gap:12px;border-top:1px solid 
 @media(max-width:1100px){.profile-layout{grid-template-columns:1fr}.profile-side-column{grid-template-columns:1fr 1fr}.profile-side-column .profile-card:nth-child(3),.profile-side-column .profile-card:nth-child(4){align-self:stretch}}
 @media(max-width:900px){.auth-shell{grid-template-columns:1fr}.auth-brand-panel{display:none}.auth-form-panel{min-height:100vh;padding:32px 24px}.auth-mobile-brand{display:flex}.auth-form-wrap{max-width:440px}.auth-message{margin:0}.profile-side-column{grid-template-columns:1fr 1fr}}
 @media(max-width:560px){.profile-side-column{grid-template-columns:1fr}.profile-layout{gap:12px}.profile-card-heading h2{font-size:17px}.appearance-options{grid-template-columns:1fr 1fr}.appearance-option{gap:7px;padding:8px}.appearance-preview{width:30px}.data-export-row{align-items:flex-start;flex-direction:column}.data-export-row button{width:100%}.auth-form-panel{padding:25px 19px}.auth-form-wrap h2{font-size:27px}.auth-subtitle{margin-bottom:22px}}
+
+
+
+/* YouTube transcript extraction and persistent conversation history */
+.youtube-form{align-items:center}
+.youtube-form .input{flex:1;min-width:180px}
+.youtube-form button{min-height:39px;white-space:nowrap}
+.transcript-summary{margin-top:15px;padding:18px 20px}
+.transcript-summary .panel-top{align-items:flex-start;margin-bottom:14px}
+.transcript-summary .panel-top h3{font-size:15px;margin-top:7px}
+.transcript-summary .markdown-body{font-size:12px;line-height:1.8;color:var(--white)}
+.transcript-summary .markdown-body h1,.transcript-summary .markdown-body h2,.transcript-summary .markdown-body h3{font-size:1.08em}
+.transcript-summary .hint{margin-top:15px}
+.transcript-alert{display:flex;align-items:flex-start;gap:9px;padding:12px 14px;margin:14px 0;border:1px solid #a76b3d60;background:#ac692510;color:#c79458;border-radius:9px;font-size:11px;line-height:1.65}
+.transcript-alert svg{flex-shrink:0;margin-top:1px}
+:root[data-theme="light"] .transcript-alert{background:#fff7e8;color:#80551b;border-color:#e6d1a2}
+.chat-history-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--line)}
+.chat-history-select{display:flex;align-items:center;gap:7px;min-width:0;flex:1;color:var(--muted)}
+.chat-history-select>svg{flex-shrink:0}
+.chat-history-select select{width:100%;min-width:0;border:1px solid var(--line);border-radius:7px;background:var(--subtle);color:var(--white);padding:7px 9px;font:500 10px Inter,sans-serif;outline:none}
+.chat-history-select select:focus{border-color:var(--lime)}
+.new-chat-button{font-size:9px;white-space:nowrap;padding:7px 9px}
+.password-input-wrap{display:flex;position:relative;align-items:center;width:100%;min-width:0}
+.password-input-wrap .input{padding-right:44px}
+.password-visibility{position:absolute;right:5px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:34px;height:34px;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer}
+.password-visibility:hover{background:var(--subtle);color:var(--lime)}
+.password-visibility:focus-visible{outline:2px solid var(--lime);outline-offset:1px}
+:root[data-theme="light"] .chat-history-select select{background:#fff;color:#25301f;border-color:#dce3d6}
+:root[data-theme="light"] .password-visibility{color:#67735f}
+:root[data-theme="light"] .password-visibility:hover{background:#edf2e6;color:#557900}
+@media(max-width:740px){
+  .youtube-form{align-items:stretch;flex-direction:column}
+  .youtube-form .input{width:100%;min-width:0}
+  .youtube-form button{width:100%}
+  .transcript-summary{padding:15px}
+  .transcript-summary .panel-top{flex-direction:column}
+}
+@media(max-width:390px){.chat-history-toolbar{align-items:stretch;flex-direction:column}.new-chat-button{width:100%}}

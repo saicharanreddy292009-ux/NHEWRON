@@ -1,24 +1,16 @@
 import logging
-from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app import database
 from app.config import get_settings
-from app.routes import chat, study_packs
+from app.routes import chat, profile, study_packs
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    database.init_db()
-    yield
-
 app = FastAPI(
     title="NHEWRON API",
     description="Learning workspace API and Ron AI chat service.",
-    version="1.0.0",
-    lifespan=lifespan,
+    version="1.1.0",
 )
 
 app.add_middleware(
@@ -30,6 +22,7 @@ app.add_middleware(
 )
 
 app.include_router(chat.router)
+app.include_router(profile.router)
 app.include_router(study_packs.router)
 
 @app.get("/", tags=["system"])

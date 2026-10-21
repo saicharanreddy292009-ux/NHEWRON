@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -11,6 +12,13 @@ import logo from "../nhewron-mark.png";
 import "./styles.css";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    })
+  : null;
 const LOCAL_KEY = "nhewron.studyPacks.react.v1";
 const GREETING = "Hey, I’m Ron — your learning companion. Ask me to explain a concept, work through a question, or make a revision plan. If you’re studying a lecture, paste its transcript in Study Studio so I can use it as context.";
 
@@ -23,19 +31,23 @@ const navItems = [
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
-function readLocalPacks() {
+function readLocalPacks(storageKey = LOCAL_KEY) {
   try {
-    const saved = JSON.parse(localStorage.getItem(LOCAL_KEY) || "[]");
+    const saved = JSON.parse(localStorage.getItem(storageKey) || "[]");
     return Array.isArray(saved) ? saved : [];
   } catch {
     return [];
   }
 }
 
-async function apiJson(path, options = {}) {
+async function apiJson(path, options = {}, accessToken = null) {
   const response = await fetch(API_BASE + path, {
     ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(options.headers || {}),
+    },
   });
   if (!response.ok) {
     let detail = "Request failed (" + response.status + ")";
@@ -101,6 +113,14 @@ function IconButton({ icon: Icon, label, onClick, className = "icon-button" }) {
 }
 
 function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [profile, setProfile] = useState({ username: "", full_name: "", email: "" });
+  const [profileDraft, setProfileDraft] = useState({ username: "", full_name: "" });
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem("nhewron.theme") === "light" ? "light" : "dark";
@@ -122,7 +142,7 @@ function App() {
   const [notes, setNotes] = useState("");
   const [roadmap, setRoadmap] = useState("");
   const [questions, setQuestions] = useState("");
-  const [packs, setPacks] = useState(() => readLocalPacks());
+  const [packs, setPacks] = useState([]);
   const [activePackId, setActivePackId] = useState(null);
   const [chatInput, setChatInput] = useState("");
   const [studioInput, setStudioInput] = useState("");
@@ -135,6 +155,9 @@ function App() {
   const chatEndRef = useRef(null);
   const studioEndRef = useRef(null);
   const currentLabel = navItems.find((item) => item.id === page)?.label || "Dashboard";
+  const localStorageKey = session?.user?.id ? `${LOCAL_KEY}.${session.user.id}` : LOCAL_KEY;
+  const requestApi = useCallback((path, options = {}) => apiJson(path, options, session?.access_token), [session?.access_token]);
+  const accountName = profile.full_name || session?.user?.user_metadata?.full_name || session?.user?.email?.split("@")[0] || "Learner";
   const dateLabel = useMemo(() => new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }).toUpperCase(), []);
 
   function flash(message) {
@@ -144,19 +167,64 @@ function App() {
   }
 
   useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return undefined;
+    }
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setSession(data.session);
+      setAuthLoading(false);
+    }).catch(() => { if (active) setAuthLoading(false); });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      setSession(nextSession);
+      if (event === "PASSWORD_RECOVERY") {
+        setRecoveryMode(true);
+        setPage("settings");
+      }
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
     try { localStorage.setItem("nhewron.theme", theme); } catch { /* storage may be disabled */ }
   }, [theme]);
 
   useEffect(() => {
-    apiJson("/api/health").then(() => setApiStatus("online")).catch(() => setApiStatus("offline"));
+    if (!session?.user?.id) {
+      setPacks([]);
+      setProfile({ username: "", full_name: "", email: "" });
+      setProfileDraft({ username: "", full_name: "" });
+      setApiStatus("checking");
+      return undefined;
+    }
     let alive = true;
-    apiJson("/api/study-packs")
-      .then((data) => { if (alive && Array.isArray(data.items)) { setPacks(data.items); localStorage.setItem(LOCAL_KEY, JSON.stringify(data.items)); } })
+    setPacks(readLocalPacks(localStorageKey));
+    requestApi("/api/health").then(() => { if (alive) setApiStatus("online"); }).catch(() => { if (alive) setApiStatus("offline"); });
+    requestApi("/api/study-packs")
+      .then((data) => {
+        if (alive && Array.isArray(data.items)) {
+          setPacks(data.items);
+          localStorage.setItem(localStorageKey, JSON.stringify(data.items));
+        }
+      })
       .catch(() => {});
+    requestApi("/api/profile")
+      .then((data) => {
+        if (alive) {
+          setProfile(data);
+          setProfileDraft({ username: data.username || "", full_name: data.full_name || "" });
+        }
+      })
+      .catch((error) => { if (alive) flash(error.message || "Could not load profile."); });
     return () => { alive = false; };
-  }, []);
+  }, [session?.user?.id, requestApi, localStorageKey]);
 
   useEffect(() => {
     if (!timerRunning) return undefined;
@@ -227,7 +295,11 @@ function App() {
       const context = target === "studio" ? transcript.trim() : "";
       const response = await fetch(API_BASE + "/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream",
+          Authorization: `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({
           messages: newMessages.slice(-18).map((message) => ({ role: message.role, content: message.content })),
           context: context || null,
@@ -336,11 +408,11 @@ function App() {
     }
     try {
       const saved = activePackId && !String(activePackId).startsWith("local-")
-        ? await apiJson("/api/study-packs/" + encodeURIComponent(activePackId), { method: "PUT", body: JSON.stringify(payload) })
-        : await apiJson("/api/study-packs", { method: "POST", body: JSON.stringify(payload) });
+        ? await requestApi("/api/study-packs/" + encodeURIComponent(activePackId), { method: "PUT", body: JSON.stringify(payload) })
+        : await requestApi("/api/study-packs", { method: "POST", body: JSON.stringify(payload) });
       setPacks((current) => {
         const updated = [saved, ...current.filter((pack) => pack.id !== saved.id)];
-        localStorage.setItem(LOCAL_KEY, JSON.stringify(updated));
+        localStorage.setItem(localStorageKey, JSON.stringify(updated));
         return updated;
       });
       setActivePackId(saved.id);
@@ -349,7 +421,7 @@ function App() {
       const localPack = { ...payload, id: activePackId || "local-" + Date.now(), created_at: new Date().toISOString(), local_only: true };
       const updated = [localPack, ...packs.filter((pack) => pack.id !== localPack.id)];
       setPacks(updated);
-      localStorage.setItem(LOCAL_KEY, JSON.stringify(updated));
+      localStorage.setItem(localStorageKey, JSON.stringify(updated));
       setActivePackId(localPack.id);
       flash("API unavailable — study pack saved in this browser.");
     }
@@ -368,13 +440,111 @@ function App() {
 
   async function deletePack(pack) {
     try {
-      if (!String(pack.id).startsWith("local-")) await apiJson("/api/study-packs/" + encodeURIComponent(pack.id), { method: "DELETE" });
+      if (!String(pack.id).startsWith("local-")) await requestApi("/api/study-packs/" + encodeURIComponent(pack.id), { method: "DELETE" });
     } catch { /* local cache can still be cleared */ }
     const updated = packs.filter((item) => item.id !== pack.id);
     setPacks(updated);
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(updated));
+    localStorage.setItem(localStorageKey, JSON.stringify(updated));
     if (activePackId === pack.id) setActivePackId(null);
     flash("Study pack deleted.");
+  }
+
+
+  async function saveProfile(event) {
+    event.preventDefault();
+    const username = profileDraft.username.trim();
+    const full_name = profileDraft.full_name.trim();
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(username)) {
+      flash("Username must be 3–24 characters using letters, numbers, or underscores.");
+      return;
+    }
+    setAccountBusy(true);
+    try {
+      const updated = await requestApi("/api/profile", {
+        method: "PATCH",
+        body: JSON.stringify({ username, full_name }),
+      });
+      setProfile(updated);
+      setProfileDraft({ username: updated.username || "", full_name: updated.full_name || "" });
+      flash("Profile updated.");
+    } catch (error) {
+      flash(error.message || "Unable to update profile.");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function changePassword(event) {
+    event.preventDefault();
+    if (newPassword.length < 8) {
+      flash("Choose a password with at least 8 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      flash("The passwords do not match.");
+      return;
+    }
+    if (!supabase) { flash("Authentication is not configured."); return; }
+    setAccountBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setNewPassword("");
+      setConfirmPassword("");
+      setRecoveryMode(false);
+      flash("Password changed successfully.");
+    } catch (error) {
+      flash(error.message || "Unable to change password.");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function exportAccountData() {
+    setAccountBusy(true);
+    try {
+      let studyPacks = packs;
+      try {
+        const result = await requestApi("/api/study-packs");
+        if (Array.isArray(result.items)) studyPacks = result.items;
+      } catch { /* include the signed-in user's browser cache when the API is offline */ }
+      const payload = {
+        exported_at: new Date().toISOString(),
+        account: {
+          email: session?.user?.email || "",
+          username: profile.username || "",
+          full_name: profile.full_name || accountName,
+        },
+        study_packs: studyPacks,
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "nhewron-account-export.json";
+      anchor.click();
+      URL.revokeObjectURL(url);
+      flash("Account data export downloaded.");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    setAccountBusy(true);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      setPacks([]);
+      setMessages([{ role: "assistant", content: GREETING }]);
+      setStudioMessages([{ role: "assistant", content: "Load your lecture and paste a transcript if you have one. Ask me a doubt, and I’ll use the transcript you provide as extra context." }]);
+      setPage("dashboard");
+      flash("Signed out successfully.");
+    } catch (error) {
+      flash(error.message || "Unable to sign out.");
+    } finally {
+      setAccountBusy(false);
+    }
   }
 
   function leaveFocus() {
@@ -391,6 +561,9 @@ function App() {
   }
 
   const timerLabel = String(Math.floor(seconds / 60)).padStart(2, "0") + ":" + String(seconds % 60).padStart(2, "0");
+
+  if (authLoading) return <div className="auth-loading"><LoaderCircle className="spin" size={25} /><span>Preparing your workspace…</span></div>;
+  if (!session) return <AuthScreen configured={Boolean(supabase)} />;
 
   return (
     <div className="app-shell">
@@ -417,7 +590,7 @@ function App() {
       <main className="main">
         <header className="topbar">
           <div className="crumb-group"><IconButton icon={mobileNav ? X : Menu} label={mobileNav ? "Close navigation" : "Open navigation"} className="mobile-menu" onClick={() => setMobileNav((value) => !value)} /><span>Workspace</span><ChevronRight size={13} /><b>{currentLabel}</b></div>
-          <div className="top-right"><button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className={"api-badge " + (apiStatus === "online" ? "connected" : "")}><i />{apiStatus === "online" ? "API ONLINE" : apiStatus === "checking" ? "CONNECTING" : "OFFLINE MODE"}</span><div className="avatar">N</div></div>
+          <div className="top-right"><button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className={"api-badge " + (apiStatus === "online" ? "connected" : "")}><i />{apiStatus === "online" ? "API ONLINE" : apiStatus === "checking" ? "CONNECTING" : "OFFLINE MODE"}</span><button type="button" className="avatar avatar-button" title="Open profile settings" aria-label="Open profile settings" onClick={() => navigate("settings")}>{accountName.slice(0, 1).toUpperCase()}</button></div>
         </header>
 
         {page === "dashboard" && (
@@ -506,8 +679,57 @@ function App() {
         )}
 
         {page === "settings" && (
-          <section className="page"><div className="page-heading"><p className="eyebrow">— SYSTEM STATUS</p><h1>Workspace <em>settings.</em></h1><p className="sub">Check service connectivity and configure your local environment.</p></div>
-            <article className="panel settings-panel"><div className="settings-row"><div className="setting-symbol"><Activity size={18} /></div><div><b>FastAPI backend</b><p>{apiStatus === "online" ? "Reachable at the configured API base URL." : "Not reachable. Start the backend on port 8000 and check VITE_API_BASE_URL."}</p></div><span className={"settings-status " + (apiStatus === "online" ? "connected" : "")}>{apiStatus === "online" ? "CONNECTED" : apiStatus === "checking" ? "CHECKING" : "OFFLINE"}</span></div><div className="settings-row"><div className="setting-symbol"><BrainCircuit size={18} /></div><div><b>Groq · GPT-OSS 120B</b><p>Configure GROQ_API_KEY and GROQ_MODEL in backend/.env. The key is never sent to the browser.</p></div><span className="settings-status">SERVER ENV</span></div><div className="settings-row"><div className="setting-symbol"><BookMarked size={18} /></div><div><b>Study packs</b><p>Persistent API saves use SQLite. If the API is offline, this browser stores a fallback copy.</p></div><span className="settings-status">{packs.length} SAVED</span></div><div className="settings-warning"><CircleHelp size={18} /><p><b>Before public production:</b> add authentication and per-user data isolation, rate limits, request quotas, migrations and a managed database. The included SQLite endpoints are a functional starter, not yet a multi-user SaaS security layer.</p></div><div className="inline-actions settings-actions"><button className="secondary" onClick={() => { setApiStatus("checking"); apiJson("/api/health").then(() => { setApiStatus("online"); flash("Backend is reachable."); }).catch(() => { setApiStatus("offline"); flash("Backend is not reachable."); }); }}><RotateCcw size={14} /> Recheck connection</button><button className="quiet" onClick={() => { if (confirm("Clear browser-only fallback study packs? This will not delete backend packs.")) { const localOnly = packs.filter((pack) => !pack.local_only && !String(pack.id).startsWith("local-")); setPacks(localOnly); localStorage.setItem(LOCAL_KEY, JSON.stringify(localOnly)); flash("Browser fallback copies cleared."); } }}><Trash2 size={14} /> Clear local fallback</button></div></article>
+          <section className="page profile-page">
+            <div className="page-heading">
+              <p className="eyebrow">— YOUR ACCOUNT</p>
+              <h1>Profile <em>settings.</em></h1>
+              <p className="sub">Manage your details, security, appearance, and personal data.</p>
+            </div>
+
+            <div className="profile-layout">
+              <article className="panel profile-card">
+                <div className="profile-card-heading">
+                  <div className="profile-symbol">{accountName.slice(0, 1).toUpperCase()}</div>
+                  <div><h2>{accountName}</h2><p>{session.user.email}</p><span className="account-chip"><Check size={12} /> Signed in</span></div>
+                </div>
+                <form className="profile-form" onSubmit={saveProfile}>
+                  <div className="profile-section-title"><div><h3>Personal information</h3><p>Your public-facing profile details.</p></div></div>
+                  <label className="profile-field"><span>Full name</span><input className="input" value={profileDraft.full_name} onChange={(event) => setProfileDraft((value) => ({ ...value, full_name: event.target.value }))} placeholder="Your full name" maxLength={100} /></label>
+                  <label className="profile-field"><span>Username</span><input className="input" value={profileDraft.username} onChange={(event) => setProfileDraft((value) => ({ ...value, username: event.target.value }))} placeholder="your_username" minLength={3} maxLength={24} autoComplete="username" /><small>3–24 letters, numbers, or underscores. Usernames must be unique.</small></label>
+                  <label className="profile-field"><span>Email address</span><input className="input" value={session.user.email || ""} readOnly disabled /><small>Email changes require a separate verification flow.</small></label>
+                  <div className="profile-actions"><button className="primary" disabled={accountBusy}><Check size={14} /> Save changes</button></div>
+                </form>
+              </article>
+
+              <div className="profile-side-column">
+                <article className="panel profile-card">
+                  <div className="profile-section-title"><div><h3>Appearance</h3><p>Choose how NHEWRON looks on this device.</p></div><Sun size={18} /></div>
+                  <div className="appearance-options">
+                    <button type="button" className={"appearance-option " + (theme === "light" ? "selected" : "")} onClick={() => setTheme("light")}><span className="appearance-preview light-preview"><i /><i /><i /></span><span><b>Light</b><small>Bright and clear</small></span>{theme === "light" && <Check size={15} />}</button>
+                    <button type="button" className={"appearance-option " + (theme === "dark" ? "selected" : "")} onClick={() => setTheme("dark")}><span className="appearance-preview dark-preview"><i /><i /><i /></span><span><b>Dark</b><small>Easy on the eyes</small></span>{theme === "dark" && <Check size={15} />}</button>
+                  </div>
+                </article>
+
+                <article className="panel profile-card">
+                  <div className="profile-section-title"><div><h3>Password & security</h3><p>Choose a strong password for your account.</p></div><Settings size={18} /></div>
+                  <form className="profile-form password-form" onSubmit={changePassword}>
+                    <label className="profile-field"><span>New password</span><input className="input" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={8} autoComplete="new-password" placeholder="At least 8 characters" required /></label>
+                    <label className="profile-field"><span>Confirm new password</span><input className="input" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={8} autoComplete="new-password" placeholder="Enter it again" required /></label>
+                    <div className="profile-actions"><button type="submit" className="secondary" disabled={accountBusy || !newPassword || !confirmPassword}>Update password</button></div>
+                  </form>
+                </article>
+
+                <article className="panel profile-card">
+                  <div className="profile-section-title"><div><h3>Your data</h3><p>Keep a personal copy of your NHEWRON study packs.</p></div><ArrowDownToLine size={18} /></div>
+                  <div className="data-export-row"><div><b>Export account data</b><small>Profile details and saved study packs as JSON.</small></div><button className="secondary" onClick={exportAccountData} disabled={accountBusy}><ArrowDownToLine size={14} /> Export</button></div>
+                </article>
+
+                <article className="panel profile-card signout-card">
+                  <div className="profile-section-title"><div><h3>Sign out</h3><p>End your current session on this device.</p></div><ExternalLink size={18} /></div>
+                  <div className="data-export-row"><div><b>{session.user.email}</b><small>You can sign in again at any time.</small></div><button className="danger-button" onClick={signOut} disabled={accountBusy}><X size={14} /> Sign out</button></div>
+                </article>
+              </div>
+            </div>
           </section>
         )}
 
@@ -517,6 +739,127 @@ function App() {
       {focusActive && <div className="focus-overlay"><div className="focus-card"><img src={logo} alt="" /><p className="eyebrow">FOCUS MODE</p><h2>Stay with <em>your intention.</em></h2><p>{intention.trim() || "Study with intention. One task at a time."}</p><div className="focus-clock">{timerLabel}</div><p className="muted">This fullscreen screen supports focus but cannot lock your computer or block other apps.</p><div className="inline-actions"><button className="primary" onClick={() => setTimerRunning((value) => !value)}>{timerRunning ? <Pause size={15} /> : <Play size={15} />}{timerRunning ? "Pause session" : "Resume session"}</button><button className="secondary" onClick={leaveFocus}>End focus session</button></div></div></div>}
       {toast && <div role="status" className="toast">{toast}</div>}
     </div>
+  );
+}
+
+
+
+function AuthScreen({ configured }) {
+  const [mode, setMode] = useState("signin");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (!configured || !supabase) {
+      setError("Authentication is not configured yet. Add the Supabase URL and publishable key to the frontend environment, then redeploy.");
+      return;
+    }
+    if (mode === "signup" && password !== confirmPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Use a password with at least 8 characters.");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (mode === "signup") {
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { data: { full_name: fullName.trim() } },
+        });
+        if (signUpError) throw signUpError;
+        if (!data.session) {
+          setMessage("Your account has been created. Check your email to verify it, then sign in.");
+          setMode("signin");
+          setPassword("");
+          setConfirmPassword("");
+        } else {
+          setMessage("Account created. Welcome to NHEWRON.");
+        }
+      } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        if (signInError) throw signInError;
+      }
+    } catch (err) {
+      setError(err.message || "Authentication failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetPassword() {
+    setError("");
+    setMessage("");
+    if (!configured || !supabase) {
+      setError("Authentication is not configured yet.");
+      return;
+    }
+    if (!email.trim()) {
+      setError("Enter your email address first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const redirectTo = window.location.origin;
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+      if (resetError) throw resetError;
+      setMessage("Password reset instructions have been sent if this email is registered.");
+    } catch (err) {
+      setError(err.message || "Could not start password reset.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-brand-panel">
+        <a className="auth-brand" href="/" aria-label="NHEWRON home"><img src={logo} alt="" /><span><b>NHEW<span>RON</span><sup>®</sup></b><small>AI / LEARNING / COMPANION</small></span></a>
+        <div className="auth-message">
+          <p className="eyebrow">YOUR LEARNING WORKSPACE</p>
+          <h1>Make space for <em>real progress.</em></h1>
+          <p>Keep your lectures, notes, practice, and focus in one place. Your workspace follows your account wherever you sign in.</p>
+          <div className="auth-feature-list"><div><BookOpen size={17} /><span>One home for your study materials</span></div><div><BrainCircuit size={17} /><span>Learn with Ron, your AI companion</span></div><div><Focus size={17} /><span>Build a focused daily routine</span></div></div>
+        </div>
+        <p className="auth-footer-note">FOCUS DEEPER. LEARN BETTER.</p>
+      </section>
+
+      <section className="auth-form-panel">
+        <div className="auth-form-wrap">
+          <div className="auth-mobile-brand"><img src={logo} alt="" /><b>NHEW<span>RON</span></b></div>
+          <p className="eyebrow">{mode === "signin" ? "WELCOME BACK" : "YOUR NEXT CHAPTER"}</p>
+          <h2>{mode === "signin" ? "Sign in to continue" : "Create your account"}</h2>
+          <p className="auth-subtitle">{mode === "signin" ? "Pick up where your learning left off." : "Set up your personal learning workspace."}</p>
+
+          {!configured && <div className="auth-notice"><CircleHelp size={17} /><span>Authentication setup required. Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in Vercel and configure the matching backend environment variables.</span></div>}
+          {error && <div role="alert" className="auth-alert auth-error">{error}</div>}
+          {message && <div role="status" className="auth-alert auth-success">{message}</div>}
+
+          <form className="auth-form" onSubmit={submit}>
+            {mode === "signup" && <label className="profile-field"><span>Full name</span><input className="input" value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="How should we call you?" autoComplete="name" maxLength={100} required /></label>}
+            <label className="profile-field"><span>Email address</span><input className="input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" autoComplete="email" required /></label>
+            <label className="profile-field"><span>Password</span><input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} required /></label>
+            {mode === "signup" && <label className="profile-field"><span>Confirm password</span><input className="input" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Enter password again" autoComplete="new-password" minLength={8} required /></label>}
+            <button className="primary auth-submit" type="submit" disabled={busy || !configured}>{busy ? <LoaderCircle className="spin" size={16} /> : null}{mode === "signin" ? "Sign in" : "Create account"}<ChevronRight size={16} /></button>
+          </form>
+
+          {mode === "signin" && <button className="auth-link-button" type="button" onClick={resetPassword} disabled={busy}>Forgot your password?</button>}
+          <div className="auth-switch">{mode === "signin" ? "New to NHEWRON?" : "Already have an account?"}<button type="button" onClick={() => { setMode((value) => value === "signin" ? "signup" : "signin"); setError(""); setMessage(""); }} disabled={busy}>{mode === "signin" ? "Create an account" : "Sign in"}</button></div>
+          <p className="auth-legal">By continuing, you agree to use your workspace responsibly and keep your account secure.</p>
+        </div>
+      </section>
+    </main>
   );
 }
 

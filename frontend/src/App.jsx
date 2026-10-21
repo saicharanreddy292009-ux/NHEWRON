@@ -315,12 +315,15 @@ function App() {
       setTranscriptLanguage(result.language || "Unknown");
       setTranscriptIsGenerated(Boolean(result.is_generated));
       setNotes((current) => current.trim() ? current : (result.summary || ""));
-      setTranscriptExtractionError(result.summary_error || "");
-      await persistChatHistory("studio", studioMessages, {
+      const historySaved = await persistChatHistory("studio", studioMessages, {
         source_url: videoUrl.trim(),
         transcript: result.transcript || "",
         summary: result.summary || "",
       });
+      setTranscriptExtractionError([
+        result.summary_error || "",
+        historySaved ? "" : "Transcript extracted, but saved chat history is unavailable until the updated Supabase schema is applied.",
+      ].filter(Boolean).join(" "));
       if (result.transcript_truncated) {
         flash("Transcript extracted. It was shortened to fit the study workspace.");
       } else {
@@ -403,8 +406,10 @@ function App() {
         setActiveChatId(saved.id);
         setChatHistory((current) => [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 30));
       }
+      return true;
     } catch (error) {
       flash("Reply received, but chat history could not be saved. " + (error.message || "Check the chat history database setup."));
+      return false;
     }
   }
 

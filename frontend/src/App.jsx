@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, BookMarked, BookOpen, BrainCircuit,
   Check, ChevronRight, CircleHelp, Clock3, ExternalLink, FileText, Focus,
   LayoutDashboard, LoaderCircle, Menu, MessageCircle, NotebookPen, Pause, Play,
-  Plus, RotateCcw, Send, Settings, Sparkles, Target, Trash2, X
+  Plus, RotateCcw, Send, Settings, Sparkles, Sun, Moon, Target, Trash2, X
 } from "lucide-react";
 import logo from "../nhewron-mark.png";
 import "./styles.css";
@@ -99,6 +101,13 @@ function IconButton({ icon: Icon, label, onClick, className = "icon-button" }) {
 }
 
 function App() {
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem("nhewron.theme") === "light" ? "light" : "dark";
+    } catch {
+      return "dark";
+    }
+  });
   const [page, setPage] = useState("dashboard");
   const [mobileNav, setMobileNav] = useState(false);
   const [apiStatus, setApiStatus] = useState("checking");
@@ -133,6 +142,12 @@ function App() {
     window.clearTimeout(flash.timeout);
     flash.timeout = window.setTimeout(() => setToast(""), 2800);
   }
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try { localStorage.setItem("nhewron.theme", theme); } catch { /* storage may be disabled */ }
+  }, [theme]);
 
   useEffect(() => {
     apiJson("/api/health").then(() => setApiStatus("online")).catch(() => setApiStatus("offline"));
@@ -402,7 +417,7 @@ function App() {
       <main className="main">
         <header className="topbar">
           <div className="crumb-group"><IconButton icon={mobileNav ? X : Menu} label={mobileNav ? "Close navigation" : "Open navigation"} className="mobile-menu" onClick={() => setMobileNav((value) => !value)} /><span>Workspace</span><ChevronRight size={13} /><b>{currentLabel}</b></div>
-          <div className="top-right"><span className={"api-badge " + (apiStatus === "online" ? "connected" : "")}><i />{apiStatus === "online" ? "API ONLINE" : apiStatus === "checking" ? "CONNECTING" : "OFFLINE MODE"}</span><div className="avatar">N</div></div>
+          <div className="top-right"><button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span></button><span className={"api-badge " + (apiStatus === "online" ? "connected" : "")}><i />{apiStatus === "online" ? "API ONLINE" : apiStatus === "checking" ? "CONNECTING" : "OFFLINE MODE"}</span><div className="avatar">N</div></div>
         </header>
 
         {page === "dashboard" && (
@@ -506,7 +521,19 @@ function App() {
 }
 
 function ChatLog({ messages, busy, endRef }) {
-  return <div className="chat-log">{messages.map((message, index) => <div key={index} className={"message " + (message.role === "user" ? "user-message" : "ron-message") + (message.isError ? " message-error" : "")}><b>{message.role === "user" ? "You" : "Ron"}</b><p>{message.content}</p></div>)}{busy && <div className="message ron-message"><b>Ron</b><p className="thinking"><LoaderCircle className="spin" size={14} /> Thinking…</p></div>}<div ref={endRef} /></div>;
+  return <div className="chat-log">{messages.map((message, index) => <div key={index} className={"message " + (message.role === "user" ? "user-message" : "ron-message") + (message.isError ? " message-error" : "")}><b>{message.role === "user" ? "You" : "Ron"}</b>{message.role === "assistant" ? (
+        <div className="markdown-body">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+              table: ({ node, ...props }) => <div className="markdown-table-wrap"><table {...props} /></div>,
+            }}
+          >
+            {message.content || ""}
+          </ReactMarkdown>
+        </div>
+      ) : <p>{message.content}</p>}</div>)}{busy && <div className="message ron-message"><b>Ron</b><p className="thinking"><LoaderCircle className="spin" size={14} /> Thinking…</p></div>}<div ref={endRef} /></div>;
 }
 
 export default App;

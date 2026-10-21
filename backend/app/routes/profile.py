@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,7 +34,7 @@ def update_profile(
         raise HTTPException(status_code=400, detail="Add at least one profile field to update.")
 
     client = get_admin_client()
-    changes["updated_at"] = "now()"
+    changes["updated_at"] = datetime.now(timezone.utc).isoformat()
     try:
         result = client.table("profiles").update(changes).eq("id", user["id"]).execute()
     except APIError as exc:

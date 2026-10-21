@@ -15,6 +15,7 @@
     "react-dom": "latest",
     "lucide-react": "latest",
     "react-markdown": "latest",
-    "remark-gfm": "latest"
+    "remark-gfm": "latest",
+    "@supabase/supabase-js": "latest"
   }
 }

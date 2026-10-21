@@ -4,8 +4,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, BookMarked, BookOpen, BrainCircuit,
-  Check, ChevronRight, CircleHelp, Clock3, ExternalLink, FileText, Focus,
-  LayoutDashboard, LoaderCircle, Menu, MessageCircle, NotebookPen, Pause, Play,
+  Check, ChevronRight, CircleHelp, Clock3, ExternalLink, Eye, EyeOff, FileText, Focus,
+  History, LayoutDashboard, LoaderCircle, Menu, MessageCircle, NotebookPen, Pause, Play,
   Plus, RotateCcw, Send, Settings, Sparkles, Sun, Moon, Target, Trash2, X
 } from "lucide-react";
 import logo from "../nhewron-mark.png";
@@ -120,6 +120,17 @@ function App() {
   const [accountBusy, setAccountBusy] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
+  const [chatHistory, setChatHistory] = useState([]);
+  const [studioHistory, setStudioHistory] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [activeStudioChatId, setActiveStudioChatId] = useState(null);
+  const [extractingTranscript, setExtractingTranscript] = useState(false);
+  const [transcriptSummary, setTranscriptSummary] = useState("");
+  const [transcriptLanguage, setTranscriptLanguage] = useState("");
+  const [transcriptIsGenerated, setTranscriptIsGenerated] = useState(false);
+  const [transcriptExtractionError, setTranscriptExtractionError] = useState("");
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [theme, setTheme] = useState(() => {
     try {
@@ -223,6 +234,12 @@ function App() {
         }
       })
       .catch((error) => { if (alive) flash(error.message || "Could not load profile."); });
+    requestApi("/api/chat-history?mode=ai")
+      .then((data) => { if (alive) setChatHistory(Array.isArray(data.items) ? data.items : []); })
+      .catch(() => {});
+    requestApi("/api/chat-history?mode=studio")
+      .then((data) => { if (alive) setStudioHistory(Array.isArray(data.items) ? data.items : []); })
+      .catch(() => {});
     return () => { alive = false; };
   }, [session?.user?.id, requestApi, localStorageKey]);
 
@@ -273,7 +290,122 @@ function App() {
       return;
     }
     setVideoId(parsed);
-    flash("Lecture loaded. If embedding is disabled, open it directly on YouTube.");
+    setTranscriptExtractionError("");
+    flash("Lecture loaded. Use Auto-extract transcript to retrieve available captions.");
+  }
+
+  async function extractTranscript() {
+    const parsed = youtubeId(videoUrl);
+    if (!parsed) {
+      setVideoId("");
+      setTranscriptExtractionError("Paste a valid YouTube link first.");
+      flash("Paste a valid YouTube link first.");
+      return;
+    }
+    setVideoId(parsed);
+    setExtractingTranscript(true);
+    setTranscriptExtractionError("");
+    try {
+      const result = await requestApi("/api/youtube/transcript", {
+        method: "POST",
+        body: JSON.stringify({ youtube_url: videoUrl.trim() }),
+      });
+      setTranscript(result.transcript || "");
+      setTranscriptSummary(result.summary || "");
+      setTranscriptLanguage(result.language || "Unknown");
+      setTranscriptIsGenerated(Boolean(result.is_generated));
+      setNotes((current) => current.trim() ? current : (result.summary || ""));
+      setTranscriptExtractionError(result.summary_error || "");
+      await persistChatHistory("studio", studioMessages, {
+        source_url: videoUrl.trim(),
+        transcript: result.transcript || "",
+        summary: result.summary || "",
+      });
+      if (result.transcript_truncated) {
+        flash("Transcript extracted. It was shortened to fit the study workspace.");
+      } else {
+        flash("Transcript extracted. Ron can now answer questions about this video.");
+      }
+    } catch (error) {
+      const detail = error.message || "The transcript could not be extracted.";
+      setTranscriptExtractionError(detail);
+      flash(detail);
+    } finally {
+      setExtractingTranscript(false);
+    }
+  }
+
+  function startNewChat(target = "main") {
+    if (target === "studio") {
+      setStudioMessages([{ role: "assistant", content: "Ask a follow-up question about the video transcript or its summary." }]);
+      setActiveStudioChatId(null);
+      setTranscript("");
+      setTranscriptSummary("");
+      setTranscriptLanguage("");
+      setTranscriptIsGenerated(false);
+      setTranscriptExtractionError("");
+    } else {
+      setMessages([{ role: "assistant", content: GREETING }]);
+      setActiveChatId(null);
+    }
+  }
+
+  async function loadChatSession(sessionId, target = "main") {
+    if (!sessionId) return;
+    try {
+      const saved = await requestApi("/api/chat-history/" + encodeURIComponent(sessionId));
+      const restored = Array.isArray(saved.messages) ? saved.messages.map(({ role, content }) => ({ role, content })) : [];
+      if (target === "studio") {
+        setStudioMessages(restored.length ? restored : [{ role: "assistant", content: "Ask a follow-up about this video." }]);
+        setActiveStudioChatId(saved.id);
+        setVideoUrl(saved.source_url || "");
+        setVideoId(youtubeId(saved.source_url || "") || "");
+        setTranscript(saved.transcript || "");
+        setTranscriptSummary(saved.summary || "");
+        navigate("studio");
+      } else {
+        setMessages(restored.length ? restored : [{ role: "assistant", content: GREETING }]);
+        setActiveChatId(saved.id);
+        navigate("ai");
+      }
+      flash("Chat history restored.");
+    } catch (error) {
+      flash(error.message || "Could not restore this conversation.");
+    }
+  }
+
+  async function persistChatHistory(target, finalMessages, metadata = {}) {
+    const isStudio = target === "studio";
+    const activeId = isStudio ? activeStudioChatId : activeChatId;
+    const firstQuestion = finalMessages.find((item) => item.role === "user")?.content || "";
+    const sourceUrl = metadata.source_url !== undefined ? metadata.source_url : (isStudio ? (videoUrl.trim() || null) : null);
+    const savedTranscript = metadata.transcript !== undefined ? metadata.transcript : (isStudio ? transcript : "");
+    const savedSummary = metadata.summary !== undefined ? metadata.summary : (isStudio ? transcriptSummary : "");
+    const payload = {
+      mode: isStudio ? "studio" : "ai",
+      title: firstQuestion.trim().replace(/\\s+/g, " ").slice(0, 72) || (isStudio ? "YouTube study session" : "Ron AI conversation"),
+      source_url: sourceUrl || null,
+      transcript: (savedTranscript || "").slice(0, 100000),
+      summary: (savedSummary || "").slice(0, 12000),
+      messages: finalMessages
+        .filter((item) => (item.role === "user" || item.role === "assistant") && String(item.content || "").trim())
+        .slice(-100)
+        .map((item) => ({ role: item.role, content: String(item.content).slice(0, 12000) })),
+    };
+    try {
+      const saved = activeId
+        ? await requestApi("/api/chat-history/" + encodeURIComponent(activeId), { method: "PUT", body: JSON.stringify(payload) })
+        : await requestApi("/api/chat-history", { method: "POST", body: JSON.stringify(payload) });
+      if (isStudio) {
+        setActiveStudioChatId(saved.id);
+        setStudioHistory((current) => [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 30));
+      } else {
+        setActiveChatId(saved.id);
+        setChatHistory((current) => [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 30));
+      }
+    } catch (error) {
+      flash("Reply received, but chat history could not be saved. " + (error.message || "Check the chat history database setup."));
+    }
   }
 
   async function sendChat(event, target = "main") {
@@ -292,7 +424,12 @@ function App() {
 
     let streamStarted = false;
     try {
-      const context = target === "studio" ? transcript.trim() : "";
+      const context = target === "studio"
+        ? [
+            transcriptSummary ? "VIDEO SUMMARY\n" + transcriptSummary : "",
+            transcript ? "TRANSCRIPT EXCERPT\n" + transcript.slice(0, 8500) : "",
+          ].filter(Boolean).join("\n\n").slice(0, 12000)
+        : "";
       const response = await fetch(API_BASE + "/api/chat", {
         method: "POST",
         headers: {
@@ -322,6 +459,7 @@ function App() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let assistantContent = "";
       let finished = false;
 
       while (!finished) {
@@ -342,6 +480,7 @@ function App() {
           try { payload = JSON.parse(data); } catch { continue; }
           if (payload.error) throw new Error(payload.error);
           if (payload.delta) {
+            assistantContent += payload.delta;
             setter((current) => {
               const updated = [...current];
               const last = updated[updated.length - 1];
@@ -359,6 +498,9 @@ function App() {
         if (last?.streaming) updated[updated.length - 1] = { ...last, streaming: false };
         return updated;
       });
+      if (assistantContent.trim()) {
+        await persistChatHistory(target, [...newMessages, { role: "assistant", content: assistantContent }]);
+      }
     } catch (error) {
       setter((current) => {
         const updated = [...current];

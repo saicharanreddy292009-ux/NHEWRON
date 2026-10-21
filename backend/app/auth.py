@@ -11,6 +11,17 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 @lru_cache
+def get_auth_client() -> Client:
+    settings = get_settings()
+    if not settings.supabase_url or not settings.supabase_anon_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY on the backend.",
+        )
+    return create_client(settings.supabase_url, settings.supabase_anon_key)
+
+
+@lru_cache
 def get_admin_client() -> Client:
     settings = get_settings()
     if not settings.supabase_url or not settings.supabase_service_role_key:
@@ -34,7 +45,7 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Sign in to continue.")
 
     try:
-        auth_client = create_client(settings.supabase_url, settings.supabase_anon_key)
+        auth_client = get_auth_client()
         result = auth_client.auth.get_user(credentials.credentials)
         user = result.user
         if user is None:

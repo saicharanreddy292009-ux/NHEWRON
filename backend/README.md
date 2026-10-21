@@ -2,6 +2,8 @@
 
 ## Setup
 
+Use Python 3.12+.
+
 ```bash
 cd backend
 python -m venv .venv
@@ -11,16 +13,22 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Create a key in the [Groq console](https://console.groq.com/keys), then set these values in `.env`:
+Configure these variables in `.env`:
 
 ```dotenv
 GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=openai/gpt-oss-120b
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_ANON_KEY=your_supabase_publishable_or_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_server_only_service_role_secret
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
-Never put this key in React code, prefix it with `VITE_`, or commit the real `.env` file.
+Create the Supabase project tables first by running [`supabase/schema.sql`](../supabase/schema.sql) in the Supabase SQL Editor. The schema adds profile creation for new users and private study packs linked to each account.
 
-Start the API:
+Keep `SUPABASE_SERVICE_ROLE_KEY` and `GROQ_API_KEY` server-side only. Never put the service role key in a `VITE_` variable or commit a real `.env` file.
+
+## Run the API
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -31,10 +39,16 @@ Health: http://localhost:8000/api/health
 
 ## Routes
 
-- `POST /api/chat` — streams Ron's Groq response as Server-Sent Events (SSE); accepts `messages` plus optional transcript `context`.
-- `GET /api/study-packs` — list saved study packs.
-- `POST /api/study-packs` — create a study pack.
-- `GET /api/study-packs/{id}`, `PUT /api/study-packs/{id}`, `DELETE /api/study-packs/{id}` — manage a pack.
-- `GET /api/health` — API and Groq configuration status.
+- `POST /api/chat` — streams Ron's Groq response; requires a valid Supabase bearer token.
+- `GET /api/profile` — returns the current user's profile.
+- `PATCH /api/profile` — updates full name and username for the current user.
+- `GET /api/study-packs` — list only the current user's study packs.
+- `POST /api/study-packs` — create a study pack for the current user.
+- `GET /api/study-packs/{id}`, `PUT /api/study-packs/{id}`, `DELETE /api/study-packs/{id}` — access only the current user's pack.
+- `GET /api/health` — public service health check.
 
-Study packs persist in SQLite via `DATABASE_PATH` (defaults to `nhewron.db`). This starter has no user authentication or per-user isolation: do not expose it publicly for multi-user data until authentication, authorization, quotas, and production database backups are added.
+## Authentication notes
+
+Supabase Auth handles registration, email verification (if enabled in the Supabase project), session storage/refresh in the official JS client, password changes, and sign-out. FastAPI validates the bearer token with Supabase Auth before serving account data. Database table access is performed on the server, and every study-pack query is filtered by the authenticated user ID.
+
+For production, verify email confirmation and password policies in Supabase Auth, set allowed redirect URLs to your frontend domain, configure exact production CORS origins, and keep all server-only secrets in Vercel backend environment variables.

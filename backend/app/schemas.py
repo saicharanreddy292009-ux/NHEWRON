@@ -41,3 +41,21 @@ class StudyPack(StudyPackInput):
 
 class StudyPackList(BaseModel):
     items: list[StudyPack]
+
+class YouTubeTranscriptRequest(BaseModel):
+    youtube_url: str = Field(min_length=8, max_length=2048)
+
+
+class ChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=12000)
+
+
+class ChatHistoryInput(BaseModel):
+    mode: Literal["ai", "studio"]
+    title: str = Field(min_length=1, max_length=200)
+    source_url: str | None = Field(default=None, max_length=2048)
+    transcript: str = Field(default="", max_length=100000)
+    summary: str = Field(default="", max_length=12000)
+    messages: list[ChatHistoryMessage] = Field(min_length=1, max_length=100)
+

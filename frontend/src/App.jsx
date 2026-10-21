@@ -120,6 +120,7 @@ function App() {
   const [accountBusy, setAccountBusy] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem("nhewron.theme") === "light" ? "light" : "dark";
@@ -176,8 +177,12 @@ function App() {
       setSession(data.session);
       setAuthLoading(false);
     }).catch(() => { if (active) setAuthLoading(false); });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
+      if (event === "PASSWORD_RECOVERY") {
+        setRecoveryMode(true);
+        setPage("settings");
+      }
     });
     return () => {
       active = false;
@@ -403,8 +408,8 @@ function App() {
     }
     try {
       const saved = activePackId && !String(activePackId).startsWith("local-")
-        ? await apiJson("/api/study-packs/" + encodeURIComponent(activePackId), { method: "PUT", body: JSON.stringify(payload) })
-        : await apiJson("/api/study-packs", { method: "POST", body: JSON.stringify(payload) });
+        ? await requestApi("/api/study-packs/" + encodeURIComponent(activePackId), { method: "PUT", body: JSON.stringify(payload) })
+        : await requestApi("/api/study-packs", { method: "POST", body: JSON.stringify(payload) });
       setPacks((current) => {
         const updated = [saved, ...current.filter((pack) => pack.id !== saved.id)];
         localStorage.setItem(localStorageKey, JSON.stringify(updated));
@@ -416,7 +421,7 @@ function App() {
       const localPack = { ...payload, id: activePackId || "local-" + Date.now(), created_at: new Date().toISOString(), local_only: true };
       const updated = [localPack, ...packs.filter((pack) => pack.id !== localPack.id)];
       setPacks(updated);
-      localStorage.setItem(LOCAL_KEY, JSON.stringify(updated));
+      localStorage.setItem(localStorageKey, JSON.stringify(updated));
       setActivePackId(localPack.id);
       flash("API unavailable — study pack saved in this browser.");
     }
@@ -435,11 +440,11 @@ function App() {
 
   async function deletePack(pack) {
     try {
-      if (!String(pack.id).startsWith("local-")) await apiJson("/api/study-packs/" + encodeURIComponent(pack.id), { method: "DELETE" });
+      if (!String(pack.id).startsWith("local-")) await requestApi("/api/study-packs/" + encodeURIComponent(pack.id), { method: "DELETE" });
     } catch { /* local cache can still be cleared */ }
     const updated = packs.filter((item) => item.id !== pack.id);
     setPacks(updated);
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(updated));
+    localStorage.setItem(localStorageKey, JSON.stringify(updated));
     if (activePackId === pack.id) setActivePackId(null);
     flash("Study pack deleted.");
   }
@@ -486,6 +491,7 @@ function App() {
       if (error) throw error;
       setNewPassword("");
       setConfirmPassword("");
+      setRecoveryMode(false);
       flash("Password changed successfully.");
     } catch (error) {
       flash(error.message || "Unable to change password.");

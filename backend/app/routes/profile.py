@@ -18,10 +18,19 @@ class ProfileUpdate(BaseModel):
 @router.get("")
 def get_profile(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     client = get_admin_client()
-    result = client.table("profiles").select("id,username,full_name,created_at,updated_at").eq("id", user["id"]).maybe_single().execute()
+    result = client.table("profiles").select("id,username,full_name,created_at,updated_at").eq("id", user["id"]).limit(1).execute()
+    if not result.data:
+        # Support accounts created before the profile trigger was installed.
+        seed = {
+            "id": user["id"],
+            "username": "user_" + user["id"].replace("-", "")[:12],
+            "full_name": "",
+        }
+        client.table("profiles").insert(seed).execute()
+        result = client.table("profiles").select("id,username,full_name,created_at,updated_at").eq("id", user["id"]).limit(1).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Profile not found. Please contact support.")
-    return {**result.data, "email": user["email"]}
+    return {**result.data[0], "email": user["email"]}
 
 
 @router.patch("")
